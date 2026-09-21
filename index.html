@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>3D Таблица 19×6</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a1a1a;
+    font-family: Arial, sans-serif;
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  #canvas-container {
+    width: 100vw;
+    height: 100vh;
+  }
+
+  /* ====== КНОПКИ (уменьшены) ====== */
+  #ui {
+    position: fixed;
+    bottom: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 8px;
+    z-index: 10;
+  }
+  .btn {
+    padding: 8px 14px;
+    border: none;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: bold;
+    color: #fff;
+    cursor: pointer;
+    box-shadow: 0 3px 8px rgba(0,0,0,0.5);
+    transition: transform 0.15s, box-shadow 0.15s;
+    touch-action: manipulation;
+  }
+  .btn:active { transform: scale(0.95); }
+  .btn-46 { background: #ff7a45; }
+  .btn-38 { background: #3b82f6; }
+  .btn-30 { background: #22c55e; }
+  .btn.active {
+    box-shadow: 0 0 18px 4px currentColor;
+    transform: scale(1.05);
+  }
+  #info {
+    position: fixed;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    color: #fff;
+    font-size: 12px;
+    opacity: 0.6;
+    pointer-events: none;
+    z-index: 10;
+  }
+
+  /* ====== ПОЛЗУНКИ ====== */
+  .slider-wrap {
+    position: fixed;
+    top: 50%;
+    transform: translateY(-50%);
+    height: 65vh;
+    width: 44px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    z-index: 10;
+    touch-action: none;
+  }
+  #slider-left  { left: 4px; }
+  #slider-right { right: 4px; }
+
+  .slider-track {
+    position: relative;
+    flex: 1;
+    width: 4px;
+    background: #444;
+    border-radius: 4px;
+    margin: 20px 0;
+  }
+  .slider-thumb {
+    position: absolute;
+    left: 50%;
+    width: 34px;
+    height: 34px;
+    margin-left: -17px;
+    margin-top: -17px;
+    border-radius: 50%;
+    background: #f0f0f0;
+    border: 3px solid #ff7a45;
+    box-shadow: 0 3px 8px rgba(0,0,0,0.6);
+    cursor: grab;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: bold;
+    color: #222;
+  }
+  .slider-thumb:active { cursor: grabbing; }
+  #slider-right .slider-thumb { border-color: #3b82f6; }
+
+  .slider-label-top,
+  .slider-label-bottom {
+    color: #aaa;
+    font-size: 10px;
+    font-weight: bold;
+  }
+</style>
+</head>
+<body>
+<div id="canvas-container"></div>
+<div id="info">🖱 Перетащи, чтобы вращать • Колёсико — зум</div>
+
+<!-- Левый ползунок: старт внизу (19), тянем вверх -->
+<div class="slider-wrap" id="slider-left">
+  <div class="slider-label-top">1</div>
+  <div class="slider-track">
+    <div class="slider-thumb" id="thumb-left">19</div>
+  </div>
+  <div class="slider-label-bottom">19</div>
+</div>
+
+<!-- Правый ползунок: старт вверху (1), тянем вниз -->
+<div class="slider-wrap" id="slider-right">
+  <div class="slider-label-top">1</div>
+  <div class="slider-track">
+    <div class="slider-thumb" id="thumb-right">1</div>
+  </div>
+  <div class="slider-label-bottom">19</div>
+</div>
+
+<div id="ui">
+  <button class="btn btn-46" data-sector="46">46 — внешний</button>
+  <button class="btn btn-38" data-sector="38">38 — средний</button>
+  <button class="btn btn-30" data-sector="30">30 — внутренний</button>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ====== РАЗМЕРЫ ======
+const ROWS = 19;
+const COLS = 6;
+const CELL = 1;
+const GAP  = 0.05;
+const STEP = CELL + GAP;
+
+// ====== ЦВЕТА СЕКТОРОВ ======
+const COLOR_46 = 0xff7a45; // оранжевый
+const COLOR_38 = 0x3b82f6; // синий
+const COLOR_30 = 0x22c55e; // зелёный
+
+// ====== ЦВЕТА ВЫДЕЛЕННЫХ КЛЕТОК ======
+const HL_LIGHT = 0x7dd3fc; // светло-голубой
+const HL_DARK  = 0x38bdf8; // другой оттенок голубого
+
+// ====== НОВЫЙ ЦВЕТ: тёмно-оранжевый для крайних клеток ======
+const EDGE_DARK_ORANGE = 0xb85c1e; // приглушённый тёмно-оранжевый
+
+// Списки выделенных клеток (по номерам 1..114)
+const HIGHLIGHT_LIGHT = new Set([8, 9, 10, 11, 14, 17, 20, 21, 22, 23]);
+const HIGHLIGHT_DARK  = new Set([
+  38, 39, 40, 41, 44, 47, 50, 53, 56, 59, 62, 65, 68, 71,
+  74, 77, 80, 83, 86, 89, 92, 95, 98, 101, 104, 105, 106, 107
+]);
+
+// ====== ПРАВКА: первые 7 сверху и последние 7 снизу ======
+const EDGE_CELLS = new Set([1, 2, 3, 4, 5, 6, 7, 108, 109, 110, 111, 112, 113, 114]);
+
+// ====== СЦЕНА ======
+const container = document.getElementById('canvas-container');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1a1a1a);
+
+const camera = new THREE.PerspectiveCamera(
+  45, window.innerWidth / window.innerHeight, 0.1, 1000
+);
+camera.position.set(0, 0, 38);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(window.devicePixelRatio);
+container.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.minDistance = 12;
+controls.maxDistance = 80;
+controls.enablePan = false;
+
+// ====== СВЕТ ======
+scene.add(new THREE.AmbientLight(0xffffff, 0.95));
+const dir1 = new THREE.DirectionalLight(0xffffff, 1.2);
+dir1.position.set(5, 10, 10);
+scene.add(dir1);
+const dir2 = new THREE.DirectionalLight(0xffffff, 0.6);
+dir2.position.set(-10, -5, -10);
+scene.add(dir2);
+
+// ====== ГРУППА ТАБЛИЦЫ ======
+const board = new THREE.Group();
+board.position.set(
+  -(COLS * STEP) / 2 + STEP / 2,
+   (ROWS * STEP) / 2 - STEP / 2,
+  0
+);
+scene.add(board);
+
+// ====== ОПРЕДЕЛЕНИЕ СЕКТОРА ======
+function getSector(row, col) {
+  const onBorder =
+    row === 0 || row === ROWS - 1 || col === 0 || col === COLS - 1;
+  if (onBorder) return 46;
+  const onMiddleRing =
+    row === 1 || row === ROWS - 2 || col === 1 || col === COLS - 2;
+  if (onMiddleRing) return 38;
+  return 30;
+}
+
+// ====== СОЗДАНИЕ КЛЕТОК ======
+const cells = [];
+let cellNumber = 1;
+
+const geometry = new THREE.BoxGeometry(CELL, CELL, 0.3);
+const edgeGeo  = new THREE.EdgesGeometry(geometry);
+
+for (let r = 0; r < ROWS; r++) {
+  for (let c = 0; c < COLS; c++) {
+    const sector = getSector(r, c);
+
+    // Базовый цвет: крайние клетки > подсветка > сектор
+    let baseColor;
+    if (EDGE_CELLS.has(cellNumber)) {
+      baseColor = EDGE_DARK_ORANGE;
+    } else if (HIGHLIGHT_LIGHT.has(cellNumber)) {
+      baseColor = HL_LIGHT;
+    } else if (HIGHLIGHT_DARK.has(cellNumber)) {
+      baseColor = HL_DARK;
+    } else {
+      baseColor = sector === 46 ? COLOR_46
+                : sector === 38 ? COLOR_38
+                :                 COLOR_30;
+    }
+
+    const mat = new THREE.MeshStandardMaterial({
+      color: baseColor,
+      roughness: 0.55,
+      metalness: 0.05,
+    });
+
+    const mesh = new THREE.Mesh(geometry, mat);
+    mesh.position.set(c * STEP, -r * STEP, 0);
+
+    const edges = new THREE.LineSegments(
+      edgeGeo,
+      new THREE.LineBasicMaterial({ color: 0x222222 })
+    );
+    mesh.add(edges);
+
+    const numTexture = makeNumberTexture(cellNumber);
+    const numMat = new THREE.MeshBasicMaterial({
+      map: numTexture,
+      transparent: true,
+      depthWrite: false,
+    });
+    const numMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(CELL * 0.85, CELL * 0.85),
+      numMat
+    );
+    numMesh.position.z = 0.16;
+    mesh.add(numMesh);
+
+    board.add(mesh);
+    cells.push({
+      mesh,
+      sector,
+      baseColor,
+      number: cellNumber,
+      row: r,
+      col: c,
+    });
+    cellNumber++;
+  }
+}
+
+// ====== ТЕКСТУРА С НОМЕРОМ ======
+function makeNumberTexture(num) {
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, size, size);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 52px Arial';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+  ctx.strokeText(num, size / 2, size / 2);
+  ctx.fillText(num, size / 2, size / 2);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.anisotropy = 4;
+  return tex;
+}
+
+// ====== ПОДСВЕТКА СЕКТОРА ======
+let activeSector = null;
+
+function highlightSector(sector) {
+  activeSector = (activeSector === sector) ? null : sector;
+
+  cells.forEach(({ mesh, sector: s, baseColor }) => {
+    const mat = mesh.material;
+    if (activeSector === null) {
+      mat.color.setHex(baseColor);
+      mat.emissive.setHex(0x000000);
+      mat.emissiveIntensity = 0;
+    } else if (s === activeSector) {
+      mat.color.setHex(baseColor);
+      mat.emissive.setHex(baseColor);
+      mat.emissiveIntensity = 0.9;
+    } else {
+      mat.color.setHex(0x2a2a2a);
+      mat.emissive.setHex(0x000000);
+      mat.emissiveIntensity = 0;
+    }
+  });
+
+  document.querySelectorAll('.btn').forEach(btn => {
+    const s = Number(btn.dataset.sector);
+    btn.classList.toggle('active', s === activeSector);
+  });
+}
+
+document.querySelectorAll('.btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    highlightSector(Number(btn.dataset.sector));
+  });
+});
+
+// ====== ВИДИМОСТЬ СТРОК (управляется ползунками) ======
+let minVisibleRow = 0;
+let maxVisibleRow = ROWS - 1;
+
+function updateRowVisibility() {
+  cells.forEach(cell => {
+    const visible = cell.row >= minVisibleRow && cell.row <= maxVisibleRow;
+    cell.mesh.visible = visible;
+  });
+}
+
+// ====== ЛОГИКА ПОЛЗУНКОВ ======
+function getTrackHeight(trackEl) {
+  return trackEl.clientHeight;
+}
+
+function setThumbPosition(thumbEl, trackEl, rowIndex) {
+  const H = getTrackHeight(trackEl);
+  const t = rowIndex / (ROWS - 1);
+  const y = t * H;
+  thumbEl.style.top = y + 'px';
+  thumbEl.textContent = (rowIndex + 1);
+}
+
+function yToRow(y, trackEl) {
+  const H = getTrackHeight(trackEl);
+  const rect = trackEl.getBoundingClientRect();
+  const localY = y - rect.top;
+  const t = Math.max(0, Math.min(1, localY / H));
+  return Math.round(t * (ROWS - 1));
+}
+
+const thumbLeft = document.getElementById('thumb-left');
+const trackLeft = document.querySelector('#slider-left .slider-track');
+
+const thumbRight = document.getElementById('thumb-right');
+const trackRight = document.querySelector('#slider-right .slider-track');
+
+let leftRow = ROWS - 1;
+let rightRow = 0;
+
+function applyVisibility() {
+  if (rightRow > leftRow) {
+    if (this === 'left') rightRow = leftRow;
+    else leftRow = rightRow;
+  }
+  minVisibleRow = rightRow;
+  maxVisibleRow = leftRow;
+  updateRowVisibility();
+}
+
+function initThumbs() {
+  setThumbPosition(thumbLeft, trackLeft, leftRow);
+  setThumbPosition(thumbRight, trackRight, rightRow);
+}
+requestAnimationFrame(initThumbs);
+
+function makeDraggable(thumbEl, trackEl, which) {
+  let dragging = false;
+
+  const startDrag = (e) => {
+    dragging = true;
+    e.preventDefault();
+    e.stopPropagation();
+    controls.enabled = false;
+    moveDrag(e);
+  };
+  const moveDrag = (e) => {
+    if (!dragging) return;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    const row = yToRow(clientY, trackEl);
+
+    if (which === 'left') {
+      leftRow = row;
+      if (rightRow > leftRow) rightRow = leftRow;
+      setThumbPosition(thumbLeft, trackLeft, leftRow);
+      setThumbPosition(thumbRight, trackRight, rightRow);
+    } else {
+      rightRow = row;
+      if (rightRow > leftRow) leftRow = rightRow;
+      setThumbPosition(thumbRight, trackRight, rightRow);
+      setThumbPosition(thumbLeft, trackLeft, leftRow);
+    }
+    minVisibleRow = rightRow;
+    maxVisibleRow = leftRow;
+    updateRowVisibility();
+  };
+  const endDrag = () => {
+    dragging = false;
+    controls.enabled = true;
+  };
+
+  thumbEl.addEventListener('mousedown', startDrag);
+  thumbEl.addEventListener('touchstart', startDrag, { passive: false });
+  window.addEventListener('mousemove', moveDrag);
+  window.addEventListener('touchmove', moveDrag, { passive: false });
+  window.addEventListener('mouseup', endDrag);
+  window.addEventListener('touchend', endDrag);
+
+  trackEl.addEventListener('click', (e) => {
+    if (e.target === thumbEl) return;
+    const row = yToRow(e.clientY, trackEl);
+    if (which === 'left') {
+      leftRow = row;
+      if (rightRow > leftRow) rightRow = leftRow;
+      setThumbPosition(thumbLeft, trackLeft, leftRow);
+      setThumbPosition(thumbRight, trackRight, rightRow);
+    } else {
+      rightRow = row;
+      if (rightRow > leftRow) leftRow = rightRow;
+      setThumbPosition(thumbRight, trackRight, rightRow);
+      setThumbPosition(thumbLeft, trackLeft, leftRow);
+    }
+    minVisibleRow = rightRow;
+    maxVisibleRow = leftRow;
+    updateRowVisibility();
+  });
+}
+
+makeDraggable(thumbLeft, trackLeft, 'left');
+makeDraggable(thumbRight, trackRight, 'right');
+
+// ====== АНИМАЦИЯ ======
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+
+// ====== RESIZE ======
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  setThumbPosition(thumbLeft, trackLeft, leftRow);
+  setThumbPosition(thumbRight, trackRight, rightRow);
+});
+</script>
+</body>
+</html>
